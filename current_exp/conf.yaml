@@ -1,0 +1,9 @@
+corpus:
+  name: 'Haskins_IEEE'
+  path: '/Users/beimingcao/Projects/Datasets/RAW_DATA/Haskins_IEEE'
+
+experimental_setup:
+  experiment_type: 'SD'
+
+data_setup:
+  spk_list: ['F01', 'F02', 'F03', 'F04', 'M01', 'M02', 'M03', 'M04'] # ['F01', 'F02', 'F03', 'F04', 'M01', 'M02', 'M03', 'M04']

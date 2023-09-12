@@ -1,0 +1,24 @@
+corpus:
+  name: 'Haskins_IEEE'
+  path: '/Users/beimingcao/Projects/Datasets/RAW_DATA/'
+  label_file: 'sentence_list.txt'
+
+experimental_setup:
+  experiment_type: 'SD'
+
+data_setup:
+  spk_list: ['F01', 'F02', 'F03', 'F04', 'M01', 'M02', 'M03', 'M04'] # ['F01', 'F02', 'F03', 'F04', 'M01', 'M02', 'M03', 'M04']
+
+acoustic_feature:
+  sampling_rate: 22050 
+  filter_length: 1024 
+  hop_length: 256 
+  win_length: 1024 
+  n_mel_channels: 80 
+  mel_fmin: 0.0 
+  mel_fmax: 8000.0
+
+articulatory_data:
+  sel_sensors: ['TR', 'TB', 'TT', 'UL', 'LL', 'JAW']   # org_sensor_list = ['TR', 'TB', 'TT', 'UL', 'LL', 'ML', 'JAW', 'JAWL']
+  sel_dim: ['px', 'py', 'pz']                          # org_dim_per_sensor = ['px', 'py', 'pz', 'ox', 'oy', 'oz']
+  lateral: 'xz'
