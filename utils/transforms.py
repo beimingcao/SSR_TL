@@ -1,6 +1,76 @@
 import numpy as np
 import librosa
 import torch
+import random
+import torchaudio
+
+class ema_sin_noise(object):
+    def __init__(self, prob = 0.5, noise_energy_ratio = 0.1, noise_freq  = 40, fs=100):
+        self.prob = prob
+        self.noise_energy_ratio = noise_energy_ratio
+        self.noise_freq = noise_freq
+        self.fs = fs
+        
+    def noise_injection(self, ema, noise_energy_ratio, noise_freq, fs):
+        for i in range(ema.shape[0]):
+            x = np.arange(ema.shape[3])
+            sin_noise = torch.outer(torch.Tensor(np.sin(2 * np.pi * noise_freq * x / fs)), torch.abs(ema.mean(3)[i,0]))
+            ema[i,0] = ema[i,0] + sin_noise.T
+        return ema
+        
+    def __call__(self, ema):
+        if random.random() < self.prob:
+            ema = self.noise_injection(ema, self.noise_energy_ratio, self.noise_freq, self.fs) 
+        return ema
+
+class ema_time_mask(object):
+    def __init__(self, prob = 0.5, mask_num = 20):
+        self.prob = prob
+        self.mask_num = mask_num
+           
+    def __call__(self, ema):
+        masking = torchaudio.transforms.TimeMasking(time_mask_param=self.mask_num)
+        if random.random() < self.prob:
+            for j in range(ema.shape[0]):
+                ema[j,0,:,:] = masking(ema[j,0,:,:])                 
+        return ema
+        
+        
+class ema_freq_mask(object):
+    def __init__(self, prob = 0.5, mask_num = 20):
+        self.prob = prob
+        self.mask_num = mask_num
+           
+    def __call__(self, ema):
+        masking = torchaudio.transforms.FrequencyMasking(freq_mask_param=self.mask_num)
+        if random.random() < self.prob:
+            for j in range(ema.shape[0]):
+                ema[j,0,:,:] = masking(ema[j,0,:,:])                      
+        return ema
+
+class ema_random_rotate(object):
+    def __init__(self, prob = 0.5, angle_range = [-30, 30]):
+        self.prob = prob
+        self.angle_range = angle_range
+        
+    def rotation(self, EMA, angle):
+        import math
+
+        rotate_matrix = np.matrix([[math.cos(angle), math.sin(angle)], [-math.sin(angle), math.cos(angle)]])
+        EMA_rotated = np.zeros((EMA.shape[0], 1, EMA.shape[2], EMA.shape[3]))
+        for j in range(EMA.shape[0]):
+            for i in range(int((EMA.shape[2])/2)):
+                sensor_2D = EMA[j,0,[2*i, 2*i+1],:]
+                sensor_2D_rotated = np.dot(sensor_2D.T, rotate_matrix)
+                EMA_rotated[j,0,[2*i, 2*i+1],:] = sensor_2D_rotated.T
+
+        return EMA_rotated        
+   
+    def __call__(self, ema):
+        if random.random() < self.prob:
+            angle = random.randint(self.angle_range[0], self.angle_range[1])
+            ema = torch.from_numpy(self.rotation(ema, angle))                        
+        return ema
 
 class Transform_Compose(object):
     def __init__(self, transforms):
@@ -221,49 +291,8 @@ class ProcrustesMatching_ATS(ProcrustesMatching):
     def __call__(self, ema, wav):        
         return super().__call__(ema), wav
 
-class change_wav_sampling_rate_ATS(change_wav_sampling_rate):  
-    def __call__(self, ema, wav):        
-        return ema, super().__call__(wav)
 
-class wav2melspec_ATS(wav2melspec):
-    def __call__(self, ema, wav):        
-        return ema, super().__call__(wav)
 
-class ema_wav_length_match(object):
-    '''
-    scale ema according to wav
-    '''
-    def __call__(self, ema, wav):
-        from scipy import ndimage
-        scale_ratio = wav.shape[0] / ema.shape[0]
-        ema_align = np.empty([wav.shape[0], ema.shape[1]])
-        for i in range(ema.shape[1]):
-            ema_align[:,i] = ndimage.zoom(ema[:,i], scale_ratio)
-        return ema_align, wav
-
-class padding_end(object):
-    def __init__(self, max_len = 240):
-        self.max_len = max_len
-    
-    def __call__(self, ema, wav):
-        ema_tensor = torch.tensor(ema)
-        pad_len = self.max_len - ema_tensor.shape[0]
-        ema_pad_row, wav_pad_row = ema_tensor[-1,:], wav[-1,:]
-        ema_pad, wav_pad = ema_pad_row.expand(pad_len, -1), wav_pad_row.expand(pad_len, -1)
-        ema_padded, wav_padded = torch.cat((ema_tensor, ema_pad), dim = 0), torch.cat((wav, wav_pad), dim = 0)
-        return ema_padded, wav_padded
-
-class zero_padding_end(object):
-    def __init__(self, max_len = 240):
-        self.max_len = max_len
-    
-    def __call__(self, ema, wav):
-        ema_tensor = torch.tensor(ema)
-        pad_len = self.max_len - ema_tensor.shape[0]
-        ema_pad_row, wav_pad_row = torch.zeros(ema.shape[1]), torch.zeros(wav.shape[1])
-        ema_pad, wav_pad = ema_pad_row.expand(pad_len, -1), wav_pad_row.expand(pad_len, -1)
-        ema_padded, wav_padded = torch.cat((ema_tensor, ema_pad), dim = 0), torch.cat((wav, wav_pad), dim = 0)
-        return ema_padded, wav_padded
 
 class apply_EMA_MVN(object):
     def __init__(self, X_mean, X_std):
@@ -272,3 +301,88 @@ class apply_EMA_MVN(object):
     def __call__(self, X, Y):
         X_norm = (X - self.X_mean)/self.X_std
         return X_norm, Y
+
+class apply_WAV_MVN(object):
+    def __init__(self, Y_mean, Y_std):
+        self.Y_mean = Y_mean
+        self.Y_std = Y_std
+    def __call__(self, X, Y):
+        Y_norm = (Y - self.Y_mean)/self.Y_std
+        return X, Y_norm
+
+class apply_EMA_MinMax(object):
+    def __init__(self, X_min, X_max):
+        self.X_min = X_min
+        self.X_max = X_max
+    def __call__(self, X, Y):
+        X_norm = (X - self.X_min)/(self.X_max - self.X_min)
+        return X_norm, Y
+
+class apply_WAV_MinMax(object):
+    def __init__(self, Y_min, Y_max):
+        self.Y_min = Y_min
+        self.Y_max = Y_max
+    def __call__(self, X, Y):
+        Y_norm = (Y - self.Y_min)/(self.Y_max - self.Y_min)
+        return X, Y_norm
+        
+####### Data augmentation transform ########
+'''
+class ema_wav_random_scale(object):
+    def __init__(self, prob = 0.5, rates = [0.8, 0.9, 1.1, 1.2]):
+        self.prob = prob
+        self.rates = rates
+    def __call__(self, ema, wav):
+        from scipy import ndimage
+        if random.random() < self.prob:
+            rate = random.choice(self.rates)
+            print(rate)
+            ema_align = np.empty([int(ema.shape[0]*rate+0.5), ema.shape[1]])
+            wav_align = np.empty([int(wav.shape[0]*rate+0.5), wav.shape[1]])   
+            for i in range(ema.shape[1]):
+                ema_align[:,i] = ndimage.zoom(ema[:,i], rate)
+            for i in range(wav.shape[1]):
+                wav_align[:,i] = ndimage.zoom(wav[:,i], rate)
+        return ema_align, wav_align
+'''
+class ema_wav_random_scale(object):
+    def __init__(self, prob = 0.5, rates = [0.8, 0.9, 1.1, 1.2]):
+        self.prob = prob
+        self.rates = rates
+    def __call__(self, ema, wav):
+        from scipy import ndimage
+        if random.random() < self.prob:
+            rate = random.choice(self.rates)
+            ema_align = np.empty([ema.shape[0], int(ema.shape[1]*rate+0.5), ema.shape[2]])
+            wav_align = np.empty([wav.shape[0], int(wav.shape[1]*rate+0.5), wav.shape[2]])   
+            for i in range(ema.shape[2]):
+                ema_align[:,:,i] = ndimage.zoom(ema[:,:,i], rate)
+            for i in range(wav.shape[2]):
+                wav_align[:,:,i] = ndimage.zoom(wav[:,:,i], rate)
+            ema, wav = torch.from_numpy(ema_align), torch.from_numpy(wav_align)
+        return ema, wav
+        
+class ema_wav_random_rotate(object):
+    def __init__(self, prob = 0.5, angle_range = [-30, 30]):
+        self.prob = prob
+        self.angle_range = angle_range
+        
+    def rotation(self, EMA, angle):
+        import math
+        rotate_matrix = [[math.cos(angle), math.sin(angle)], [-math.sin(angle), math.cos(angle)]]
+        EMA_rotated = np.zeros((EMA.shape[0], EMA.shape[1], EMA.shape[2]))
+
+        for i in range(int((EMA.shape[2])/2)):
+
+            sensor_2D = EMA[:,:,2*i:2*i+2]
+            sensor_2D_rotated = np.dot(sensor_2D, rotate_matrix)
+            EMA_rotated[:,:,2*i:2*i+2] = sensor_2D_rotated
+
+        return EMA_rotated        
+   
+    def __call__(self, ema, wav):
+        if random.random() < self.prob:
+            angle = random.randint(self.angle_range[0], self.angle_range[1])
+            ema = torch.from_numpy(self.rotation(ema, angle))
+                        
+        return ema, wav
